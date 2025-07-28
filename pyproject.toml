@@ -1,0 +1,64 @@
+[build-system]
+requires = ["hatchling>=1.21"]
+build-backend = "hatchling.build"
+
+[project]
+name = "tink-finance-python"
+version = "0.1.0"
+description = "A Python client for the Tink Finance API"
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [
+    {name = "Lawrence Ibarria", email = "lawrence@impossibly.ai"}
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Typing :: Typed",
+]
+requires-python = ">=3.10"
+dependencies = [
+    "httpx>=0.24.0",
+    "pydantic>=2.0.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "black",
+  "isort",
+  "mypy",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/tink_finance"]
+# Ensure the type-hints marker is included in the wheel (PEP 561)
+force-include = { "src/tink_finance/py.typed" = "tink_finance/py.typed" }
+
+[project.urls]
+Homepage = "https://github.com/ImpossiblyAI/tink-finance"
+Repository = "https://github.com/ImpossiblyAI/tink-finance"
+Issues = "https://github.com/ImpossiblyAI/tink-finance/issues"
+
+[tool.black]
+line-length = 88
+target-version = ['py310']
+
+[tool.isort]
+profile = "black"
+multi_line_output = 3
+
+[tool.mypy]
+python_version = "3.10"
+warn_unused_ignores = true
+warn_redundant_casts = true
+warn_return_any = true
+no_implicit_optional = true
+disallow_untyped_defs = true
+strict_equality = true
