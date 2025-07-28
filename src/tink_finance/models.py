@@ -218,4 +218,133 @@ class UserTokenRequest(BaseModel):
     client_id: str = Field(..., description="Tink client ID")
     client_secret: str = Field(..., description="Tink client secret")
     grant_type: str = Field(default="authorization_code", description="OAuth grant type")
-    code: str = Field(..., description="User authorization code") 
+    code: str = Field(..., description="User authorization code")
+
+
+class AuthorizationCodeTokenRequest(BaseModel):
+    """Model for authorization code token request (one-time use)."""
+    
+    client_id: str = Field(..., description="Tink client ID")
+    client_secret: str = Field(..., description="Tink client secret")
+    grant_type: str = Field(default="authorization_code", description="OAuth grant type")
+    code: str = Field(..., description="Authorization code from Tink Link")
+
+
+class Transaction(BaseModel):
+    """Model for a single transaction."""
+    
+    id: str = Field(..., description="Transaction ID")
+    accountId: str = Field(..., description="Account ID")
+    amount: float = Field(..., description="Transaction amount")
+    currencyCode: str = Field(..., description="Currency code")
+    description: Optional[str] = Field(None, description="Transaction description")
+    date: str = Field(..., description="Transaction date")
+    status: str = Field(..., description="Transaction status")
+    categoryId: Optional[str] = Field(None, description="Category ID")
+    categoryType: Optional[str] = Field(None, description="Category type")
+    categoryName: Optional[str] = Field(None, description="Category name")
+    reference: Optional[str] = Field(None, description="Transaction reference")
+    originalDate: Optional[str] = Field(None, description="Original transaction date")
+    originalAmount: Optional[float] = Field(None, description="Original amount")
+    originalCurrencyCode: Optional[str] = Field(None, description="Original currency code")
+    exchangeRate: Optional[float] = Field(None, description="Exchange rate")
+    chargeDate: Optional[str] = Field(None, description="Charge date")
+    valueDate: Optional[str] = Field(None, description="Value date")
+    balance: Optional[float] = Field(None, description="Account balance after transaction")
+    pending: bool = Field(default=False, description="Whether transaction is pending")
+    type: Optional[str] = Field(None, description="Transaction type")
+    subcategoryId: Optional[str] = Field(None, description="Subcategory ID")
+    subcategoryName: Optional[str] = Field(None, description="Subcategory name")
+    subcategoryType: Optional[str] = Field(None, description="Subcategory type")
+
+
+class TransactionsResponse(BaseModel):
+    """Model for transactions response."""
+    
+    transactions: List[Transaction] = Field(..., description="List of transactions")
+    nextPageToken: Optional[str] = Field(None, description="Token for next page")
+    totalCount: Optional[int] = Field(None, description="Total number of transactions")
+
+
+class Account(BaseModel):
+    """Model for a single account."""
+    
+    id: str = Field(..., description="Account ID")
+    name: str = Field(..., description="Account name")
+    type: str = Field(..., description="Account type")
+    balance: float = Field(..., description="Account balance")
+    currencyCode: str = Field(..., description="Currency code")
+    status: str = Field(..., description="Account status")
+    ownerExternalUserId: Optional[str] = Field(None, description="Owner external user ID")
+    accountNumber: Optional[str] = Field(None, description="Account number")
+    iban: Optional[str] = Field(None, description="IBAN")
+    bic: Optional[str] = Field(None, description="BIC/SWIFT code")
+    sortCode: Optional[str] = Field(None, description="Sort code")
+    availableBalance: Optional[float] = Field(None, description="Available balance")
+    creditLimit: Optional[float] = Field(None, description="Credit limit")
+    interestRate: Optional[float] = Field(None, description="Interest rate")
+    lastSync: Optional[str] = Field(None, description="Last sync timestamp")
+    flags: Optional[List[str]] = Field(None, description="Account flags")
+    accountNumberType: Optional[str] = Field(None, description="Account number type")
+    holderName: Optional[str] = Field(None, description="Account holder name")
+    institutionId: Optional[str] = Field(None, description="Institution ID")
+    institutionName: Optional[str] = Field(None, description="Institution name")
+
+
+class AccountsResponse(BaseModel):
+    """Model for accounts response."""
+    
+    accounts: List[Account] = Field(..., description="List of accounts")
+    totalCount: Optional[int] = Field(None, description="Total number of accounts")
+
+
+# Tink Callback Models
+class TinkCallbackSuccess(BaseModel):
+    """Model for successful Tink callback response."""
+    
+    code: str = Field(..., description="Authorization code for getting user token")
+    credentials_id: str = Field(..., description="Identifier of the created credentials")
+    state: Optional[str] = Field(None, description="State parameter if provided in request")
+
+
+class TinkCallbackError(BaseModel):
+    """Model for Tink callback error response."""
+    
+    error: str = Field(..., description="Error status/category")
+    error_reason: str = Field(..., description="Specific cause of the error")
+    message: str = Field(..., description="Localized user-facing error message")
+    tracking_id: str = Field(..., description="Tink's internal identifier for this error")
+    credentials: Optional[str] = Field(None, description="Credentials ID if credentials were created")
+    error_type: Optional[str] = Field(None, description="Authentication error type (if error=AUTHENTICATION_ERROR)")
+    provider_name: Optional[str] = Field(None, description="Selected bank connection name")
+    payment_request_id: Optional[str] = Field(None, description="Payment request ID if using Payment Initiation")
+    state: Optional[str] = Field(None, description="State parameter if provided in request")
+
+
+class TinkCallbackResult(BaseModel):
+    """Union type for Tink callback results."""
+    
+    success: Optional[TinkCallbackSuccess] = Field(None, description="Success response")
+    error: Optional[TinkCallbackError] = Field(None, description="Error response")
+    is_success: bool = Field(..., description="Whether the callback was successful")
+    is_user_cancelled: bool = Field(..., description="Whether the user cancelled the flow")
+    
+    @classmethod
+    def from_success(cls, success: TinkCallbackSuccess) -> 'TinkCallbackResult':
+        """Create a success result."""
+        return cls(
+            success=success,
+            error=None,
+            is_success=True,
+            is_user_cancelled=False
+        )
+    
+    @classmethod
+    def from_error(cls, error: TinkCallbackError) -> 'TinkCallbackResult':
+        """Create an error result."""
+        return cls(
+            success=None,
+            error=error,
+            is_success=False,
+            is_user_cancelled=error.error == "USER_CANCELLED"
+        ) 

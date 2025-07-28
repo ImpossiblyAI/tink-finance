@@ -1,5 +1,5 @@
 """
-Custom exceptions for the Tink Finance API client.
+Custom exceptions for the Tink Finance client.
 """
 
 
@@ -10,6 +10,11 @@ class TinkAPIError(Exception):
 
 class TinkAuthenticationError(TinkAPIError):
     """Exception raised when authentication fails."""
+    pass
+
+
+class TinkCallbackError(TinkAPIError):
+    """Exception raised when callback parsing fails."""
     pass
 
 

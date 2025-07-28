@@ -18,7 +18,10 @@ from tink_finance.models import (
     UserResponse,
     AuthorizationGrantRequest,
     AuthorizationGrantResponse,
-    UserTokenRequest
+    UserTokenRequest,
+    AuthorizationCodeTokenRequest,
+    TransactionsResponse,
+    AccountsResponse
 )
 from tink_finance.exceptions import TinkAPIError, TinkAuthenticationError
 
@@ -40,6 +43,11 @@ class TinkClient:
     USER_ENDPOINT = "/user"
     CREATE_USER_ENDPOINT = "/user/create"
     DELETE_USER_ENDPOINT = "/user/delete"
+    
+    # Data API endpoints
+    DATA_BASE_URL = "https://api.tink.com/data/v2"
+    TRANSACTIONS_ENDPOINT = "/transactions"
+    ACCOUNTS_ENDPOINT = "/accounts"
     
     # Token scopes for different operations
     USER_CREATION_SCOPES = ["authorization:grant", "user:create"]
@@ -431,3 +439,248 @@ class TinkClient:
         if self.http_client:
             await self.http_client.aclose()
             self.http_client = None 
+
+    def get_connection_url(
+        self,
+        redirect_uri: str,
+        market: str = "ES",
+        locale: str = "en_US",
+        state: Optional[str] = None,
+        authorization_code: Optional[str] = None
+    ) -> str:
+        """
+        Generate a Tink connection URL for account linking.
+        
+        Args:
+            redirect_uri: The URL where users will be redirected after completing the flow
+            market: Market code (e.g., 'ES' for Spain, 'SE' for Sweden)
+            locale: Locale code (e.g., 'en_US' for English, 'es_ES' for Spanish)
+            state: Optional state parameter that will be provided to the callback
+            authorization_code: Optional authorization code for continuous access
+            
+        Returns:
+            Complete Tink connection URL with all required parameters.
+            
+        Example:
+            >>> client.get_connection_url(
+            ...     redirect_uri="https://example.com/tink/callback",
+            ...     market="ES",
+            ...     locale="en_US"
+            ... )
+            'https://link.tink.com/1.0/transactions/connect-accounts/?client_id=...&redirect_uri=...&market=ES&locale=en_US'
+            
+            >>> client.get_connection_url(
+            ...     redirect_uri="https://example.com/tink/callback",
+            ...     state="user_session_123",
+            ...     authorization_code="auth_code_456"
+            ... )
+            'https://link.tink.com/1.0/transactions/connect-accounts/?client_id=...&redirect_uri=...&market=ES&locale=en_US&state=user_session_123&authorization_code=auth_code_456'
+        """
+        from urllib.parse import quote
+        
+        base_url = "https://link.tink.com/1.0/transactions/connect-accounts/"
+        
+        # Build query parameters
+        params = {
+            "client_id": self.client_id,
+            "redirect_uri": quote(redirect_uri, safe=""),
+            "market": market,
+            "locale": locale
+        }
+        
+        # Add optional parameters if provided
+        if state is not None:
+            params["state"] = state
+        if authorization_code is not None:
+            params["authorization_code"] = authorization_code
+        
+        # Construct query string
+        query_string = "&".join([f"{key}={value}" for key, value in params.items()])
+        
+        return f"{base_url}?{query_string}"
+
+    async def get_transactions_with_code(
+        self,
+        authorization_code: str,
+        account_id_in: Optional[List[str]] = None,
+        status_in: Optional[List[str]] = None,
+        page_size: Optional[int] = None,
+        page_token: Optional[str] = None,
+        booked_date_gte: Optional[str] = None,
+        booked_date_lte: Optional[str] = None
+    ) -> TransactionsResponse:
+        """
+        Get transactions using a one-time authorization code.
+        
+        This method uses the authorization code from the Tink Link flow to get a user access token
+        and then fetches transactions. The authorization code can only be used once.
+        
+        Args:
+            authorization_code: The authorization code from Tink Link callback
+            account_id_in: List of account IDs to filter transactions (optional)
+            status_in: List of transaction statuses to filter (optional)
+            page_size: Maximum number of transactions per page (max 100)
+            page_token: Token for pagination (optional)
+            booked_date_gte: Start date for filtering (YYYY-MM-DD format)
+            booked_date_lte: End date for filtering (YYYY-MM-DD format)
+            
+        Returns:
+            TransactionsResponse object containing transactions and pagination info.
+            
+        Raises:
+            TinkAuthenticationError: If the authorization code is invalid or expired.
+            TinkAPIError: If the API request fails for other reasons.
+            
+        Example:
+            >>> transactions = await client.get_transactions_with_code(
+            ...     authorization_code="auth_code_123",
+            ...     page_size=50,
+            ...     booked_date_gte="2024-01-01",
+            ...     booked_date_lte="2024-01-31"
+            ... )
+            >>> print(f"Found {len(transactions.transactions)} transactions")
+        """
+        # Get user token using the authorization code
+        user_token = await self._get_user_token_with_code(authorization_code)
+        
+        # Build query parameters
+        params = {}
+        
+        if account_id_in:
+            for account_id in account_id_in:
+                params.setdefault("accountIdIn", []).append(account_id)
+        
+        if status_in:
+            for status in status_in:
+                params.setdefault("statusIn", []).append(status)
+        
+        if page_size is not None:
+            params["pageSize"] = min(page_size, 100)  # API limit is 100
+        
+        if page_token is not None:
+            params["pageToken"] = page_token
+        
+        if booked_date_gte is not None:
+            params["bookedDateGte"] = booked_date_gte
+        
+        if booked_date_lte is not None:
+            params["bookedDateLte"] = booked_date_lte
+        
+        url = self.DATA_BASE_URL + self.TRANSACTIONS_ENDPOINT
+        
+        try:
+            response = await self.http_client.get(
+                url,
+                params=params,
+                headers={
+                    "Authorization": f"{user_token.token_type.capitalize()} {user_token.access_token}",
+                    "Content-Type": "application/json"
+                }
+            )
+            
+            response.raise_for_status()
+            
+            return TransactionsResponse(**response.json())
+            
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 401:
+                raise TinkAuthenticationError("Invalid or expired authorization code") from e
+            else:
+                raise TinkAPIError(f"Get transactions failed: {e.response.status_code}") from e
+        except httpx.RequestError as e:
+            raise TinkAPIError(f"Request failed: {str(e)}") from e
+        except Exception as e:
+            raise TinkAPIError(f"Unexpected error: {str(e)}") from e
+
+    async def get_accounts_with_code(self, authorization_code: str) -> AccountsResponse:
+        """
+        Get accounts using a one-time authorization code.
+        
+        This method uses the authorization code from the Tink Link flow to get a user access token
+        and then fetches account information. The authorization code can only be used once.
+        
+        Args:
+            authorization_code: The authorization code from Tink Link callback
+            
+        Returns:
+            AccountsResponse object containing account information.
+            
+        Raises:
+            TinkAuthenticationError: If the authorization code is invalid or expired.
+            TinkAPIError: If the API request fails for other reasons.
+            
+        Example:
+            >>> accounts = await client.get_accounts_with_code("auth_code_123")
+            >>> print(f"Found {len(accounts.accounts)} accounts")
+        """
+        # Get user token using the authorization code
+        user_token = await self._get_user_token_with_code(authorization_code)
+        
+        url = self.DATA_BASE_URL + self.ACCOUNTS_ENDPOINT
+        
+        try:
+            response = await self.http_client.get(
+                url,
+                headers={
+                    "Authorization": f"{user_token.token_type.capitalize()} {user_token.access_token}",
+                    "Content-Type": "application/json"
+                }
+            )
+            
+            response.raise_for_status()
+            
+            return AccountsResponse(**response.json())
+            
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 401:
+                raise TinkAuthenticationError("Invalid or expired authorization code") from e
+            else:
+                raise TinkAPIError(f"Get accounts failed: {e.response.status_code}") from e
+        except httpx.RequestError as e:
+            raise TinkAPIError(f"Request failed: {str(e)}") from e
+        except Exception as e:
+            raise TinkAPIError(f"Unexpected error: {str(e)}") from e
+
+    async def _get_user_token_with_code(self, authorization_code: str) -> Token:
+        """
+        Get a user access token using an authorization code (one-time use).
+        
+        Args:
+            authorization_code: The authorization code from Tink Link
+            
+        Returns:
+            Token object containing the user access token.
+            
+        Raises:
+            TinkAuthenticationError: If the authorization code is invalid or expired.
+            TinkAPIError: If the API request fails for other reasons.
+        """
+        token_request = AuthorizationCodeTokenRequest(
+            client_id=self.client_id,
+            client_secret=self.client_secret,
+            code=authorization_code
+        )
+        
+        url = self.base_url + self.TOKEN_ENDPOINT
+        
+        try:
+            response = await self.http_client.post(
+                url,
+                data=token_request.model_dump(),
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+            
+            response.raise_for_status()
+            
+            token_response = TokenResponse(**response.json())
+            return Token.from_token_response(token_response)
+            
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 401:
+                raise TinkAuthenticationError("Invalid or expired authorization code") from e
+            else:
+                raise TinkAPIError(f"API request failed: {e.response.status_code}") from e
+        except httpx.RequestError as e:
+            raise TinkAPIError(f"Request failed: {str(e)}") from e
+        except Exception as e:
+            raise TinkAPIError(f"Unexpected error: {str(e)}") from e 
