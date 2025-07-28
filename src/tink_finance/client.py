@@ -3,7 +3,7 @@ Tink Finance API client implementation.
 """
 
 import os
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from datetime import datetime
 
 import httpx
@@ -70,16 +70,18 @@ class TinkClient:
             base_url: Base URL for the Tink API. Defaults to production API.
             timeout: Request timeout in seconds.
         """
-        self.client_id = client_id or os.getenv("TINK_CLIENT_ID")
-        self.client_secret = client_secret or os.getenv("TINK_CLIENT_SECRET")
-        self.base_url = base_url or self.BASE_URL
-        self.timeout = timeout
-        
-        if not self.client_id:
+        local_client_id = client_id or os.getenv("TINK_CLIENT_ID")
+        local_client_secret = client_secret or os.getenv("TINK_CLIENT_SECRET")
+        if not local_client_id:
             raise ValueError("client_id must be provided or TINK_CLIENT_ID environment variable must be set")
-        if not self.client_secret:
+        if not local_client_secret:
             raise ValueError("client_secret must be provided or TINK_CLIENT_SECRET environment variable must be set")
         
+        self.client_id = local_client_id
+        self.client_secret = local_client_secret
+        self.base_url = base_url or self.BASE_URL
+        self.timeout = timeout
+                
         self.http_client: httpx.AsyncClient = httpx.AsyncClient(timeout=self.timeout)
         
         # Internal token cache
@@ -325,9 +327,9 @@ class TinkClient:
 
     async def _grant_user_access_internal(
         self, 
+        scopes: List[str],
         user_id: Optional[str] = None,
         external_user_id: Optional[str] = None,
-        scopes: List[str] = None
     ) -> AuthorizationGrantResponse:
         """
         Internal method to grant access to a user with the requested scopes.
@@ -434,11 +436,10 @@ class TinkClient:
         except Exception as e:
             raise TinkAPIError(f"Unexpected error: {str(e)}") from e
     
-    async def close(self):
+    async def close(self) -> None:
         """Close the HTTP client."""
         if self.http_client:
-            await self.http_client.aclose()
-            self.http_client = None 
+            await self.http_client.aclose()            
 
     def get_connection_url(
         self,
@@ -544,7 +545,7 @@ class TinkClient:
         user_token = await self._get_user_token_with_code(authorization_code)
         
         # Build query parameters
-        params = {}
+        params: Dict[str, Any] = {}
         
         if account_id_in:
             for account_id in account_id_in:

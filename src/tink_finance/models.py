@@ -4,8 +4,8 @@ Pydantic models for Tink Finance API requests and responses.
 
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Optional, List, Set
-from pydantic import BaseModel, Field, field_validator
+from typing import Optional, List, Set, Union
+from pydantic import BaseModel, Field, field_validator, ValidationInfo
 
 
 class TokenRequest(BaseModel):
@@ -41,7 +41,7 @@ class Token(BaseModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), description="Token creation timestamp")
     
     @field_validator('scope')
-    def parse_scope(cls, v):
+    def parse_scope(cls, v: str) -> str:
         """Parse scope string into a set for easier manipulation."""
         return v
     
@@ -158,7 +158,7 @@ class UserResponse(BaseModel):
     username: Optional[str] = Field(None, description="Username")
     
     @field_validator('created', mode='before')
-    def convert_created_timestamp(cls, v):
+    def convert_created_timestamp(cls, v: Union[int, str]) -> str:
         """Convert integer timestamp to string if needed."""
         if isinstance(v, int):
             # Convert milliseconds to seconds and then to datetime string
@@ -188,7 +188,7 @@ class AuthorizationGrantRequest(BaseModel):
     scope: str = Field(..., description="Scope of access")
     
     @field_validator('user_id', 'external_user_id')
-    def validate_user_identifier(cls, v, info):
+    def validate_user_identifier(cls, v: Optional[str], info: ValidationInfo) -> Optional[str]:
         if info.field_name == 'user_id' and v is not None:
             # Check if external_user_id is also set
             if hasattr(info.data, 'external_user_id') and info.data.external_user_id is not None:
@@ -200,7 +200,7 @@ class AuthorizationGrantRequest(BaseModel):
         return v
     
     @field_validator('scope')
-    def validate_scope(cls, v):
+    def validate_scope(cls, v: str) -> str:
         if not v:
             raise ValueError("Scope cannot be empty")
         return v
