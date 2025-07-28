@@ -14,8 +14,12 @@ from tink_finance.models import (
     CreateUserResponse, 
     UserResponse,
     UserProfile,
-    NotificationSettings
+    NotificationSettings,
+    AuthorizationGrantRequest,
+    AuthorizationGrantResponse,
+    UserTokenRequest
 )
+from tink_finance.exceptions import TinkAPIError, TinkAuthenticationError, TinkRateLimitError, TinkValidationError
 
 __version__ = "0.1.0"
 __all__ = [
@@ -27,5 +31,12 @@ __all__ = [
     "CreateUserResponse", 
     "UserResponse",
     "UserProfile",
-    "NotificationSettings"
+    "NotificationSettings",
+    "AuthorizationGrantRequest",
+    "AuthorizationGrantResponse",
+    "UserTokenRequest",
+    "TinkAPIError",
+    "TinkAuthenticationError", 
+    "TinkRateLimitError",
+    "TinkValidationError"
 ] 

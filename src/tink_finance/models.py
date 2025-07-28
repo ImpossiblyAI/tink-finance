@@ -38,7 +38,7 @@ class Token(BaseModel):
     token_type: str = Field(default="bearer", description="Token type")
     expires_in: int = Field(..., description="Token expiration time in seconds")
     scope: str = Field(..., description="OAuth scope")
-    created_at: datetime = Field(default_factory=datetime.now(timezone.utc), description="Token creation timestamp")
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), description="Token creation timestamp")
     
     @field_validator('scope')
     def parse_scope(cls, v):
@@ -63,7 +63,7 @@ class Token(BaseModel):
     @property
     def time_until_expiry(self) -> timedelta:
         """Get time until token expires."""
-        return self.expires_at - datetime.utcnow()
+        return self.expires_at - datetime.now(timezone.utc)
     
     @property
     def is_expiring_soon(self, buffer_minutes: int = 5) -> bool:
@@ -125,6 +125,13 @@ class NotificationSettings(BaseModel):
     unusualCategory: bool = Field(default=False, description="Unusual category notifications")
 
 
+class PeriodSettings(BaseModel):
+    """Model for user period settings."""
+    
+    mode: str = Field(..., description="Period mode")
+    adjustedPeriodDay: int = Field(..., description="Adjusted period day")
+
+
 class UserProfile(BaseModel):
     """Model for user profile information."""
     
@@ -135,6 +142,7 @@ class UserProfile(BaseModel):
     periodAdjustedDay: Optional[int] = Field(None, description="Period adjusted day")
     periodMode: Optional[str] = Field(None, description="Period mode")
     timeZone: str = Field(..., description="User's timezone")
+    periodSettings: PeriodSettings = Field(..., description="User period settings")
 
 
 class UserResponse(BaseModel):
@@ -148,6 +156,15 @@ class UserResponse(BaseModel):
     nationalId: Optional[str] = Field(None, description="National ID")
     profile: UserProfile = Field(..., description="User profile")
     username: Optional[str] = Field(None, description="Username")
+    
+    @field_validator('created', mode='before')
+    def convert_created_timestamp(cls, v):
+        """Convert integer timestamp to string if needed."""
+        if isinstance(v, int):
+            # Convert milliseconds to seconds and then to datetime string
+            dt = datetime.fromtimestamp(v / 1000, tz=timezone.utc)
+            return dt.isoformat()
+        return v
 
 
 class CreateUserRequest(BaseModel):
@@ -155,10 +172,50 @@ class CreateUserRequest(BaseModel):
     
     market: str = Field(..., description="Market code (e.g., 'SE')")
     locale: str = Field(..., description="Locale code (e.g., 'sv_SE')")
-    externalUserId: Optional[str] = Field(None, description="External user ID")
+    external_user_id: Optional[str] = Field(None, description="External user ID")
 
 
 class CreateUserResponse(BaseModel):
     """Model for user creation response."""
     
-    user_id: str = Field(..., description="Created user ID") 
+    user_id: str = Field(..., description="Created user ID")
+
+
+class AuthorizationGrantRequest(BaseModel):
+    """Request model for authorization grant."""
+    user_id: Optional[str] = Field(None, description="User ID (cannot be used with external_user_id)")
+    external_user_id: Optional[str] = Field(None, description="External user ID (cannot be used with user_id)")
+    scope: str = Field(..., description="Scope of access")
+    
+    @field_validator('user_id', 'external_user_id')
+    def validate_user_identifier(cls, v, info):
+        if info.field_name == 'user_id' and v is not None:
+            # Check if external_user_id is also set
+            if hasattr(info.data, 'external_user_id') and info.data.external_user_id is not None:
+                raise ValueError("Cannot specify both user_id and external_user_id")
+        elif info.field_name == 'external_user_id' and v is not None:
+            # Check if user_id is also set
+            if hasattr(info.data, 'user_id') and info.data.user_id is not None:
+                raise ValueError("Cannot specify both user_id and external_user_id")
+        return v
+    
+    @field_validator('scope')
+    def validate_scope(cls, v):
+        if not v:
+            raise ValueError("Scope cannot be empty")
+        return v
+
+
+class AuthorizationGrantResponse(BaseModel):
+    """Model for authorization grant response."""
+    
+    code: str = Field(..., description="User authorization code")
+
+
+class UserTokenRequest(BaseModel):
+    """Model for user token request."""
+    
+    client_id: str = Field(..., description="Tink client ID")
+    client_secret: str = Field(..., description="Tink client secret")
+    grant_type: str = Field(default="authorization_code", description="OAuth grant type")
+    code: str = Field(..., description="User authorization code") 

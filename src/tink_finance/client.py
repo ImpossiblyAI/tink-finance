@@ -4,7 +4,6 @@ Tink Finance API client implementation.
 
 import os
 from typing import Optional, List
-from urllib.parse import urljoin
 from datetime import datetime
 
 import httpx
@@ -16,7 +15,10 @@ from tink_finance.models import (
     Token,
     CreateUserRequest, 
     CreateUserResponse, 
-    UserResponse
+    UserResponse,
+    AuthorizationGrantRequest,
+    AuthorizationGrantResponse,
+    UserTokenRequest
 )
 from tink_finance.exceptions import TinkAPIError, TinkAuthenticationError
 
@@ -34,6 +36,7 @@ class TinkClient:
     
     BASE_URL = "https://api.tink.com/api/v1"
     TOKEN_ENDPOINT = "/oauth/token"
+    AUTHORIZATION_GRANT_ENDPOINT = "/oauth/authorization-grant"
     USER_ENDPOINT = "/user"
     CREATE_USER_ENDPOINT = "/user/create"
     DELETE_USER_ENDPOINT = "/user/delete"
@@ -95,7 +98,7 @@ class TinkClient:
             scope=scope,
         )
         
-        url = urljoin(self.base_url, self.TOKEN_ENDPOINT)
+        url = self.base_url + self.TOKEN_ENDPOINT
         
         try:
             response = await self.http_client.post(
@@ -167,10 +170,10 @@ class TinkClient:
         create_request = CreateUserRequest(
             market=market,
             locale=locale,
-            externalUserId=external_user_id
+            external_user_id=external_user_id
         )
         
-        url = urljoin(self.base_url, self.CREATE_USER_ENDPOINT)
+        url = self.base_url + self.CREATE_USER_ENDPOINT
         
         try:
             response = await self.http_client.post(
@@ -209,12 +212,13 @@ class TinkClient:
         except Exception as e:
             raise TinkAPIError(f"Unexpected error: {str(e)}") from e
 
-    async def get_user(self, user_token: Token) -> UserResponse:
+    async def get_user(self, user_id: Optional[str] = None, external_user_id: Optional[str] = None) -> UserResponse:
         """
         Get the authenticated user's information.
         
         Args:
-            user_token: User token with 'user:read' scope (obtained through OAuth flow).
+            user_id: The user ID to get information for (cannot be used with external_user_id)
+            external_user_id: The external user ID to get information for (cannot be used with user_id)
             
         Returns:
             UserResponse object containing the user information.
@@ -222,15 +226,22 @@ class TinkClient:
         Raises:
             TinkAuthenticationError: If authentication fails.
             TinkAPIError: If the API request fails for other reasons.
+            ValueError: If neither user_id nor external_user_id is provided, or both are provided.
         """
-        # Validate user token has required scopes
-        if not user_token.has_all_scopes(self.USER_READ_SCOPES):
-            raise ValueError(f"User token missing required scopes: {self.USER_READ_SCOPES}")
+        if not user_id and not external_user_id:
+            raise ValueError("Either user_id or external_user_id must be provided")
+        if user_id and external_user_id:
+            raise ValueError("Cannot specify both user_id and external_user_id")
         
-        if user_token.is_expired:
-            raise ValueError("User token is expired")
+        # Grant access and get user token internally
+        grant_response = await self._grant_user_access_internal(
+            user_id=user_id, 
+            external_user_id=external_user_id,
+            scopes=["user:read"]
+        )
+        user_token = await self._get_user_token_internal(grant_response.code)
         
-        url = urljoin(self.base_url, self.USER_ENDPOINT)
+        url = self.base_url + self.USER_ENDPOINT
         
         try:
             response = await self.http_client.get(
@@ -242,7 +253,7 @@ class TinkClient:
             )
             
             response.raise_for_status()
-            
+            print(response.json())
             return UserResponse(**response.json())
             
         except httpx.HTTPStatusError as e:
@@ -255,25 +266,33 @@ class TinkClient:
         except Exception as e:
             raise TinkAPIError(f"Unexpected error: {str(e)}") from e
 
-    async def delete_user(self, user_token: Token) -> None:
+    async def delete_user(self, user_id: Optional[str] = None, external_user_id: Optional[str] = None) -> None:
         """
         Delete the authenticated user and all associated data.
         
         Args:
-            user_token: User token with 'user:delete' scope (obtained through OAuth flow).
+            user_id: The user ID to delete (cannot be used with external_user_id)
+            external_user_id: The external user ID to delete (cannot be used with user_id)
             
         Raises:
             TinkAuthenticationError: If authentication fails.
             TinkAPIError: If the API request fails for other reasons.
+            ValueError: If neither user_id nor external_user_id is provided, or both are provided.
         """
-        # Validate user token has required scopes
-        if not user_token.has_all_scopes(self.USER_DELETE_SCOPES):
-            raise ValueError(f"User token missing required scopes: {self.USER_DELETE_SCOPES}")
+        if not user_id and not external_user_id:
+            raise ValueError("Either user_id or external_user_id must be provided")
+        if user_id and external_user_id:
+            raise ValueError("Cannot specify both user_id and external_user_id")
         
-        if user_token.is_expired:
-            raise ValueError("User token is expired")
+        # Grant access and get user token internally
+        grant_response = await self._grant_user_access_internal(
+            user_id=user_id,
+            external_user_id=external_user_id,
+            scopes=["user:delete"]
+        )
+        user_token = await self._get_user_token_internal(grant_response.code)
         
-        url = urljoin(self.base_url, self.DELETE_USER_ENDPOINT)
+        url = self.base_url + self.DELETE_USER_ENDPOINT
         
         try:
             response = await self.http_client.post(
@@ -291,6 +310,117 @@ class TinkClient:
                 raise TinkAuthenticationError("Invalid user token") from e
             else:
                 raise TinkAPIError(f"Delete user failed: {e.response.status_code}") from e
+        except httpx.RequestError as e:
+            raise TinkAPIError(f"Request failed: {str(e)}") from e
+        except Exception as e:
+            raise TinkAPIError(f"Unexpected error: {str(e)}") from e
+
+    async def _grant_user_access_internal(
+        self, 
+        user_id: Optional[str] = None,
+        external_user_id: Optional[str] = None,
+        scopes: List[str] = None
+    ) -> AuthorizationGrantResponse:
+        """
+        Internal method to grant access to a user with the requested scopes.
+        
+        Args:
+            user_id: The user ID to grant access to (cannot be used with external_user_id)
+            external_user_id: The external user ID to grant access to (cannot be used with user_id)
+            scopes: List of scopes to grant
+            
+        Returns:
+            AuthorizationGrantResponse object containing the authorization code.
+        """
+        if not user_id and not external_user_id:
+            raise ValueError("Either user_id or external_user_id must be provided")
+        if user_id and external_user_id:
+            raise ValueError("Cannot specify both user_id and external_user_id")
+        
+        # Get valid token automatically
+        token = await self._get_valid_token(self.USER_CREATION_SCOPES)
+        
+        grant_request = AuthorizationGrantRequest(
+            user_id=user_id,
+            external_user_id=external_user_id,
+            scope=",".join(scopes)
+        )
+        
+        url = self.base_url + self.AUTHORIZATION_GRANT_ENDPOINT
+        
+        try:
+            response = await self.http_client.post(
+                url,
+                data=grant_request.model_dump(),
+                headers={
+                    "Authorization": f"{token.token_type.capitalize()} {token.access_token}",
+                    "Content-Type": "application/x-www-form-urlencoded"
+                }
+            )
+            
+            response.raise_for_status()
+            
+            return AuthorizationGrantResponse(**response.json())
+            
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 401:
+                # Token might be invalid, clear cache and retry once
+                self._token_cache = None
+                token = await self._get_valid_token(self.USER_CREATION_SCOPES)
+                
+                response = await self.http_client.post(
+                    url,
+                    data=grant_request.model_dump(),
+                    headers={
+                        "Authorization": f"{token.token_type.capitalize()} {token.access_token}",
+                        "Content-Type": "application/x-www-form-urlencoded"
+                    }
+                )
+                response.raise_for_status()
+                return AuthorizationGrantResponse(**response.json())
+            else:
+                raise TinkAPIError(f"Grant user access failed: {e.response.status_code}") from e
+        except httpx.RequestError as e:
+            raise TinkAPIError(f"Request failed: {str(e)}") from e
+        except Exception as e:
+            raise TinkAPIError(f"Unexpected error: {str(e)}") from e
+
+    async def _get_user_token_internal(self, authorization_code: str) -> Token:
+        """
+        Internal method to get a user access token using an authorization code.
+        
+        Args:
+            authorization_code: The authorization code from grant_user_access
+            
+        Returns:
+            Token object containing the user access token.
+        """
+        token_request = UserTokenRequest(
+            client_id=self.client_id,
+            client_secret=self.client_secret,
+            grant_type="authorization_code",
+            code=authorization_code
+        )
+        
+        url = self.base_url + self.TOKEN_ENDPOINT
+        
+        try:
+            response = await self.http_client.post(
+                url,
+                data=token_request.model_dump(),
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+            
+            response.raise_for_status()
+            
+            token_response = TokenResponse(**response.json())
+            return Token.from_token_response(token_response)
+            
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 401:
+                raise TinkAuthenticationError("Invalid authorization code") from e
+            else:
+                raise TinkAPIError(f"API request failed: {e.response.status_code}") from e
         except httpx.RequestError as e:
             raise TinkAPIError(f"Request failed: {str(e)}") from e
         except Exception as e:
