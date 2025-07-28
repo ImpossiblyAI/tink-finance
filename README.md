@@ -1,6 +1,6 @@
 # Tink Finance Client
 
-A Python client for the Tink Finance API that provides easy-to-use async methods for interacting with Tink's financial services.
+A Python client for the Tink Finance API that provides easy-to-use async methods for interacting with Tink's financial services with automatic token management.
 
 ## Installation
 
@@ -18,9 +18,13 @@ async def main():
     # Initialize client with environment variables
     client = TinkClient()
     
-    # Get access token
-    token_response = await client.get_access_token()
-    print(f"Access token: {token_response.access_token}")
+    # Create a user - token management is automatic!
+    user = await client.create_user(
+        market="ES",
+        locale="es_ES",
+        external_user_id="my_user_123"
+    )
+    print(f"Created user: {user.user_id}")
 
 # Run the async function
 asyncio.run(main())
@@ -46,11 +50,28 @@ client = TinkClient(
 
 ## Features
 
-- ✅ Async HTTP client using httpx
-- ✅ Type hints throughout
-- ✅ Pydantic models for request/response validation
-- ✅ Environment variable support
-- ✅ Comprehensive error handling
+- ✅ **Automatic token management** - No manual token handling required
+- ✅ **Token caching and refresh** - Optimized performance with automatic retry
+- ✅ **Async HTTP client** using httpx
+- ✅ **Type hints** throughout
+- ✅ **Pydantic models** for request/response validation
+- ✅ **Environment variable support**
+- ✅ **Comprehensive error handling**
+- ✅ **User management** - Create, read, and delete users
+
+## User Management
+
+The library provides simple user management with automatic token handling:
+
+```python
+# Create users with automatic token management
+user1 = await client.create_user(market="ES", locale="es_ES")
+user2 = await client.create_user(market="SE", locale="sv_SE")
+
+# User operations (require user tokens from OAuth flow)
+user_info = await client.get_user(user_token)
+await client.delete_user(user_token)
+```
 
 ## Development
 

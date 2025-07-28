@@ -3,14 +3,22 @@ Tink Finance API client implementation.
 """
 
 import os
-from typing import Optional
+from typing import Optional, List
 from urllib.parse import urljoin
+from datetime import datetime
 
 import httpx
 from dotenv import load_dotenv
 
-from .models import TokenRequest, TokenResponse
-from .exceptions import TinkAPIError, TinkAuthenticationError
+from tink_finance.models import (
+    TokenRequest, 
+    TokenResponse, 
+    Token,
+    CreateUserRequest, 
+    CreateUserResponse, 
+    UserResponse
+)
+from tink_finance.exceptions import TinkAPIError, TinkAuthenticationError
 
 # Load environment variables
 load_dotenv()
@@ -21,10 +29,19 @@ class TinkClient:
     Async client for the Tink Finance API.
     
     Supports environment variable configuration and explicit credential overrides.
+    Automatically manages tokens with caching and refresh.
     """
     
     BASE_URL = "https://api.tink.com/api/v1"
     TOKEN_ENDPOINT = "/oauth/token"
+    USER_ENDPOINT = "/user"
+    CREATE_USER_ENDPOINT = "/user/create"
+    DELETE_USER_ENDPOINT = "/user/delete"
+    
+    # Token scopes for different operations
+    USER_CREATION_SCOPES = ["authorization:grant", "user:create"]
+    USER_READ_SCOPES = ["user:read"]
+    USER_DELETE_SCOPES = ["user:delete"]
     
     def __init__(
         self,
@@ -52,26 +69,12 @@ class TinkClient:
         if not self.client_secret:
             raise ValueError("client_secret must be provided or TINK_CLIENT_SECRET environment variable must be set")
         
-        self._http_client: Optional[httpx.AsyncClient] = None
-    
-    async def __aenter__(self):
-        """Async context manager entry."""
-        self._http_client = httpx.AsyncClient(timeout=self.timeout)
-        return self
-    
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        """Async context manager exit."""
-        if self._http_client:
-            await self._http_client.aclose()
-    
-    @property
-    def http_client(self) -> httpx.AsyncClient:
-        """Get or create HTTP client."""
-        if self._http_client is None:
-            self._http_client = httpx.AsyncClient(timeout=self.timeout)
-        return self._http_client
-    
-    async def get_access_token(self, scope: str = "user:create") -> TokenResponse:
+        self.http_client: httpx.AsyncClient = httpx.AsyncClient(timeout=self.timeout)
+        
+        # Internal token cache
+        self._token_cache: Optional[Token] = None
+        
+    async def _get_access_token(self, scope: str) -> Token:
         """
         Get an OAuth access token from Tink API.
         
@@ -79,7 +82,7 @@ class TinkClient:
             scope: OAuth scope for the token request.
             
         Returns:
-            TokenResponse object containing the access token and metadata.
+            Token object containing the access token and metadata with validation capabilities.
             
         Raises:
             TinkAuthenticationError: If authentication fails.
@@ -103,7 +106,8 @@ class TinkClient:
             
             response.raise_for_status()
             
-            return TokenResponse(**response.json())
+            token_response = TokenResponse(**response.json())
+            return Token.from_token_response(token_response)
             
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 401:
@@ -114,9 +118,186 @@ class TinkClient:
             raise TinkAPIError(f"Request failed: {str(e)}") from e
         except Exception as e:
             raise TinkAPIError(f"Unexpected error: {str(e)}") from e
+
+    async def _get_valid_token(self, required_scopes: List[str]) -> Token:
+        """
+        Get a valid token with the required scopes, using cache if available.
+        
+        Args:
+            required_scopes: List of required scopes for the operation
+            
+        Returns:
+            Valid Token object with required scopes
+        """
+        # Check if we have a cached token that's valid and has required scopes
+        if (self._token_cache and 
+            not self._token_cache.is_expired and 
+            self._token_cache.has_all_scopes(required_scopes)):
+            return self._token_cache
+        
+        # Get new token with required scopes
+        scope_string = ",".join(required_scopes)
+        self._token_cache = await self._get_access_token(scope=scope_string)
+        return self._token_cache
+
+    async def create_user(
+        self, 
+        market: str = 'ES', 
+        locale: str = 'es_ES', 
+        external_user_id: Optional[str] = None
+    ) -> CreateUserResponse:
+        """
+        Create a new user in Tink.
+        
+        Args:
+            market: Market code (e.g., 'ES' for Spain, 'SE' for Sweden)
+            locale: Locale code (e.g., 'es_ES' for Spanish, 'sv_SE' for Swedish)
+            external_user_id: Optional external user ID for your own reference
+            
+        Returns:
+            CreateUserResponse object containing the created user ID.
+            
+        Raises:
+            TinkAuthenticationError: If authentication fails.
+            TinkAPIError: If the API request fails for other reasons.
+        """
+        # Get valid token automatically
+        token = await self._get_valid_token(self.USER_CREATION_SCOPES)
+        
+        create_request = CreateUserRequest(
+            market=market,
+            locale=locale,
+            externalUserId=external_user_id
+        )
+        
+        url = urljoin(self.base_url, self.CREATE_USER_ENDPOINT)
+        
+        try:
+            response = await self.http_client.post(
+                url,
+                json=create_request.model_dump(exclude_none=True),
+                headers={
+                    "Authorization": f"{token.token_type.capitalize()} {token.access_token}",
+                    "Content-Type": "application/json"
+                }
+            )
+            
+            response.raise_for_status()
+            
+            return CreateUserResponse(**response.json())
+            
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 401:
+                # Token might be invalid, clear cache and retry once
+                self._token_cache = None
+                token = await self._get_valid_token(self.USER_CREATION_SCOPES)
+                
+                response = await self.http_client.post(
+                    url,
+                    json=create_request.model_dump(exclude_none=True),
+                    headers={
+                        "Authorization": f"{token.token_type.capitalize()} {token.access_token}",
+                        "Content-Type": "application/json"
+                    }
+                )
+                response.raise_for_status()
+                return CreateUserResponse(**response.json())
+            else:
+                raise TinkAPIError(f"Create user failed: {e.response.status_code}") from e
+        except httpx.RequestError as e:
+            raise TinkAPIError(f"Request failed: {str(e)}") from e
+        except Exception as e:
+            raise TinkAPIError(f"Unexpected error: {str(e)}") from e
+
+    async def get_user(self, user_token: Token) -> UserResponse:
+        """
+        Get the authenticated user's information.
+        
+        Args:
+            user_token: User token with 'user:read' scope (obtained through OAuth flow).
+            
+        Returns:
+            UserResponse object containing the user information.
+            
+        Raises:
+            TinkAuthenticationError: If authentication fails.
+            TinkAPIError: If the API request fails for other reasons.
+        """
+        # Validate user token has required scopes
+        if not user_token.has_all_scopes(self.USER_READ_SCOPES):
+            raise ValueError(f"User token missing required scopes: {self.USER_READ_SCOPES}")
+        
+        if user_token.is_expired:
+            raise ValueError("User token is expired")
+        
+        url = urljoin(self.base_url, self.USER_ENDPOINT)
+        
+        try:
+            response = await self.http_client.get(
+                url,
+                headers={
+                    "Authorization": f"{user_token.token_type.capitalize()} {user_token.access_token}",
+                    "Content-Type": "application/json"
+                }
+            )
+            
+            response.raise_for_status()
+            
+            return UserResponse(**response.json())
+            
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 401:
+                raise TinkAuthenticationError("Invalid user token") from e
+            else:
+                raise TinkAPIError(f"Get user failed: {e.response.status_code}") from e
+        except httpx.RequestError as e:
+            raise TinkAPIError(f"Request failed: {str(e)}") from e
+        except Exception as e:
+            raise TinkAPIError(f"Unexpected error: {str(e)}") from e
+
+    async def delete_user(self, user_token: Token) -> None:
+        """
+        Delete the authenticated user and all associated data.
+        
+        Args:
+            user_token: User token with 'user:delete' scope (obtained through OAuth flow).
+            
+        Raises:
+            TinkAuthenticationError: If authentication fails.
+            TinkAPIError: If the API request fails for other reasons.
+        """
+        # Validate user token has required scopes
+        if not user_token.has_all_scopes(self.USER_DELETE_SCOPES):
+            raise ValueError(f"User token missing required scopes: {self.USER_DELETE_SCOPES}")
+        
+        if user_token.is_expired:
+            raise ValueError("User token is expired")
+        
+        url = urljoin(self.base_url, self.DELETE_USER_ENDPOINT)
+        
+        try:
+            response = await self.http_client.post(
+                url,
+                headers={
+                    "Authorization": f"{user_token.token_type.capitalize()} {user_token.access_token}",
+                    "Content-Type": "application/json"
+                }
+            )
+            
+            response.raise_for_status()
+            
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 401:
+                raise TinkAuthenticationError("Invalid user token") from e
+            else:
+                raise TinkAPIError(f"Delete user failed: {e.response.status_code}") from e
+        except httpx.RequestError as e:
+            raise TinkAPIError(f"Request failed: {str(e)}") from e
+        except Exception as e:
+            raise TinkAPIError(f"Unexpected error: {str(e)}") from e
     
     async def close(self):
         """Close the HTTP client."""
-        if self._http_client:
-            await self._http_client.aclose()
-            self._http_client = None 
+        if self.http_client:
+            await self.http_client.aclose()
+            self.http_client = None 

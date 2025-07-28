@@ -6,7 +6,26 @@ for interacting with Tink's financial services.
 """
 
 from tink_finance.client import TinkClient
-from tink_finance.models import TokenResponse, TokenRequest
+from tink_finance.models import (
+    TokenResponse, 
+    TokenRequest, 
+    Token,
+    CreateUserRequest,
+    CreateUserResponse, 
+    UserResponse,
+    UserProfile,
+    NotificationSettings
+)
 
 __version__ = "0.1.0"
-__all__ = ["TinkClient", "TokenResponse", "TokenRequest"] 
+__all__ = [
+    "TinkClient", 
+    "TokenResponse", 
+    "TokenRequest",
+    "Token",
+    "CreateUserRequest",
+    "CreateUserResponse", 
+    "UserResponse",
+    "UserProfile",
+    "NotificationSettings"
+] 
