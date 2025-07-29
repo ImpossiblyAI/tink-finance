@@ -53,6 +53,7 @@ class TinkClient:
     USER_CREATION_SCOPES = ["authorization:grant", "user:create"]
     USER_READ_SCOPES = ["user:read"]
     USER_DELETE_SCOPES = ["user:delete"]
+    USER_DATA_SCOPES = ["accounts:read", "transactions:read"]
     
     def __init__(
         self,
@@ -84,9 +85,12 @@ class TinkClient:
                 
         self.http_client: httpx.AsyncClient = httpx.AsyncClient(timeout=self.timeout)
         
-        # Internal token cache
+        # Internal token cache for application-level tokens
         self._token_cache: Optional[Token] = None
         
+        # User token cache: maps user identifier to Token
+        self._user_token_cache: Dict[str, Token] = {}
+
     async def _get_access_token(self, scope: str) -> Token:
         """
         Get an OAuth access token from Tink API.
@@ -500,6 +504,118 @@ class TinkClient:
         
         return f"{base_url}?{query_string}"
 
+    def _get_user_cache_key(self, user_id: Optional[str] = None, external_user_id: Optional[str] = None, authorization_code: Optional[str] = None) -> str:
+        """
+        Generate a cache key for user tokens.
+        
+        Args:
+            user_id: User ID
+            external_user_id: External user ID
+            authorization_code: Authorization code (used when no user identification available)
+            
+        Returns:
+            Cache key string
+        """
+        if user_id:
+            return f"user:{user_id}"
+        elif external_user_id:
+            return f"external_user:{external_user_id}"
+        elif authorization_code:
+            return f"auth_code:{authorization_code}"
+        else:
+            raise ValueError("Either user_id, external_user_id, or authorization_code must be provided")
+    
+    def _cache_user_token(self, token: Token, user_id: Optional[str] = None, external_user_id: Optional[str] = None, authorization_code: Optional[str] = None) -> None:
+        """
+        Cache a user token.
+        
+        Args:
+            token: Token to cache
+            user_id: User ID
+            external_user_id: External user ID
+            authorization_code: Authorization code (used when no user identification available)
+        """
+        cache_key = self._get_user_cache_key(user_id, external_user_id, authorization_code)
+        self._user_token_cache[cache_key] = token
+    
+    def _get_cached_user_token(self, user_id: Optional[str] = None, external_user_id: Optional[str] = None, authorization_code: Optional[str] = None) -> Optional[Token]:
+        """
+        Get a cached user token if available and valid.
+        
+        Args:
+            user_id: User ID
+            external_user_id: External user ID
+            authorization_code: Authorization code (used when no user identification available)
+            
+        Returns:
+            Cached token if available and valid, None otherwise
+        """
+        cache_key = self._get_user_cache_key(user_id, external_user_id, authorization_code)
+        token = self._user_token_cache.get(cache_key)
+        
+        if token and not token.is_expired and token.has_all_scopes(self.USER_DATA_SCOPES):
+            return token
+        
+        # Remove expired or invalid token from cache
+        if token:
+            del self._user_token_cache[cache_key]
+        
+        return None
+    
+    def clear_user_token_cache(self, user_id: Optional[str] = None, external_user_id: Optional[str] = None, authorization_code: Optional[str] = None) -> None:
+        """
+        Clear cached user token.
+        
+        Args:
+            user_id: User ID to clear cache for
+            external_user_id: External user ID to clear cache for
+            authorization_code: Authorization code to clear cache for
+        """
+        if user_id is None and external_user_id is None and authorization_code is None:
+            # Clear all user tokens
+            self._user_token_cache.clear()
+        else:
+            cache_key = self._get_user_cache_key(user_id, external_user_id, authorization_code)
+            self._user_token_cache.pop(cache_key, None)
+    
+    async def _get_valid_user_token(
+        self, 
+        authorization_code: Optional[str] = None, 
+        user_id: Optional[str] = None, 
+        external_user_id: Optional[str] = None
+    ) -> Token:
+        """
+        Get a valid user token, using cache if available.
+        
+        Args:
+            authorization_code: Authorization code for getting new token if needed
+            user_id: User ID for caching
+            external_user_id: External user ID for caching
+            
+        Returns:
+            Valid user token
+        """
+        # Check for cached token first
+        cached_token = self._get_cached_user_token(user_id, external_user_id, authorization_code)
+        if cached_token:
+            return cached_token
+        
+        # If no cached token and no authorization code, we can't proceed
+        if not authorization_code:
+            raise ValueError("No cached token available and no authorization code provided")
+        
+        # Get new token using authorization code
+        token = await self._get_user_token_with_code(authorization_code)
+        
+        # Cache the token using available identification
+        if user_id or external_user_id:
+            self._cache_user_token(token, user_id, external_user_id)
+        else:
+            # Cache using authorization code as key
+            self._cache_user_token(token, authorization_code=authorization_code)
+        
+        return token
+
     async def get_transactions_with_code(
         self,
         authorization_code: str,
@@ -508,16 +624,16 @@ class TinkClient:
         page_size: Optional[int] = None,
         page_token: Optional[str] = None,
         booked_date_gte: Optional[str] = None,
-        booked_date_lte: Optional[str] = None
+        booked_date_lte: Optional[str] = None,
     ) -> TransactionsResponse:
         """
-        Get transactions using a one-time authorization code.
+        Get transactions using a cached user token or authorization code.
         
-        This method uses the authorization code from the Tink Link flow to get a user access token
-        and then fetches transactions. The authorization code can only be used once.
+        This method first checks for a cached user token. If available and valid, it uses that.
+        Otherwise, it uses the authorization code to get a new user access token and caches it.
         
         Args:
-            authorization_code: The authorization code from Tink Link callback
+            authorization_code: The authorization code from Tink Link callback (required if no user identification provided)
             account_id_in: List of account IDs to filter transactions (optional)
             status_in: List of transaction statuses to filter (optional)
             page_size: Maximum number of transactions per page (max 100)
@@ -541,8 +657,9 @@ class TinkClient:
             ... )
             >>> print(f"Found {len(transactions.transactions)} transactions")
         """
-        # Get user token using the authorization code
-        user_token = await self._get_user_token_with_code(authorization_code)
+        # Get valid user token (cached or new)
+        
+        user_token = await self._get_valid_user_token(authorization_code=authorization_code)
         
         # Build query parameters
         params: Dict[str, Any] = {}
@@ -585,7 +702,20 @@ class TinkClient:
             
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 401:
-                raise TinkAuthenticationError("Invalid or expired authorization code") from e
+                # Token might be invalid, clear cache and retry once
+                self.clear_user_token_cache(authorization_code=authorization_code)
+                user_token = await self._get_valid_user_token(authorization_code=authorization_code)
+                
+                response = await self.http_client.get(
+                    url,
+                    params=params,
+                    headers={
+                        "Authorization": f"{user_token.token_type.capitalize()} {user_token.access_token}",
+                        "Content-Type": "application/json"
+                    }
+                )
+                response.raise_for_status()
+                return TransactionsResponse(**response.json())
             else:
                 raise TinkAPIError(f"Get transactions failed: {e.response.status_code}") from e
         except httpx.RequestError as e:
@@ -597,8 +727,8 @@ class TinkClient:
         """
         Get accounts using a one-time authorization code.
         
-        This method uses the authorization code from the Tink Link flow to get a user access token
-        and then fetches account information. The authorization code can only be used once.
+        This method first checks for a cached user token. If available and valid, it uses that.
+        Otherwise, it uses the authorization code to get a new user access token and caches it.
         
         Args:
             authorization_code: The authorization code from Tink Link callback
@@ -614,8 +744,8 @@ class TinkClient:
             >>> accounts = await client.get_accounts_with_code("auth_code_123")
             >>> print(f"Found {len(accounts.accounts)} accounts")
         """
-        # Get user token using the authorization code
-        user_token = await self._get_user_token_with_code(authorization_code)
+        
+        user_token = await self._get_valid_user_token(authorization_code=authorization_code)
         
         url = self.DATA_BASE_URL + self.ACCOUNTS_ENDPOINT
         
@@ -634,7 +764,19 @@ class TinkClient:
             
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 401:
-                raise TinkAuthenticationError("Invalid or expired authorization code") from e
+                # Token might be invalid, clear cache and retry once
+                self.clear_user_token_cache(authorization_code=authorization_code)
+                user_token = await self._get_valid_user_token(authorization_code=authorization_code)
+                
+                response = await self.http_client.get(
+                    url,
+                    headers={
+                        "Authorization": f"{user_token.token_type.capitalize()} {user_token.access_token}",
+                        "Content-Type": "application/json"
+                    }
+                )
+                response.raise_for_status()
+                return AccountsResponse(**response.json())
             else:
                 raise TinkAPIError(f"Get accounts failed: {e.response.status_code}") from e
         except httpx.RequestError as e:
@@ -672,7 +814,6 @@ class TinkClient:
             )
             
             response.raise_for_status()
-            
             token_response = TokenResponse(**response.json())
             return Token.from_token_response(token_response)
             

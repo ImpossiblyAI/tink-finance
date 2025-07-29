@@ -4,7 +4,7 @@ Pydantic models for Tink Finance API requests and responses.
 
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Optional, List, Set, Union
+from typing import Optional, List, Set, Union, Dict, Any
 from pydantic import BaseModel, Field, field_validator, ValidationInfo
 
 
@@ -230,74 +230,6 @@ class AuthorizationCodeTokenRequest(BaseModel):
     code: str = Field(..., description="Authorization code from Tink Link")
 
 
-class Transaction(BaseModel):
-    """Model for a single transaction."""
-    
-    id: str = Field(..., description="Transaction ID")
-    accountId: str = Field(..., description="Account ID")
-    amount: float = Field(..., description="Transaction amount")
-    currencyCode: str = Field(..., description="Currency code")
-    description: Optional[str] = Field(None, description="Transaction description")
-    date: str = Field(..., description="Transaction date")
-    status: str = Field(..., description="Transaction status")
-    categoryId: Optional[str] = Field(None, description="Category ID")
-    categoryType: Optional[str] = Field(None, description="Category type")
-    categoryName: Optional[str] = Field(None, description="Category name")
-    reference: Optional[str] = Field(None, description="Transaction reference")
-    originalDate: Optional[str] = Field(None, description="Original transaction date")
-    originalAmount: Optional[float] = Field(None, description="Original amount")
-    originalCurrencyCode: Optional[str] = Field(None, description="Original currency code")
-    exchangeRate: Optional[float] = Field(None, description="Exchange rate")
-    chargeDate: Optional[str] = Field(None, description="Charge date")
-    valueDate: Optional[str] = Field(None, description="Value date")
-    balance: Optional[float] = Field(None, description="Account balance after transaction")
-    pending: bool = Field(default=False, description="Whether transaction is pending")
-    type: Optional[str] = Field(None, description="Transaction type")
-    subcategoryId: Optional[str] = Field(None, description="Subcategory ID")
-    subcategoryName: Optional[str] = Field(None, description="Subcategory name")
-    subcategoryType: Optional[str] = Field(None, description="Subcategory type")
-
-
-class TransactionsResponse(BaseModel):
-    """Model for transactions response."""
-    
-    transactions: List[Transaction] = Field(..., description="List of transactions")
-    nextPageToken: Optional[str] = Field(None, description="Token for next page")
-    totalCount: Optional[int] = Field(None, description="Total number of transactions")
-
-
-class Account(BaseModel):
-    """Model for a single account."""
-    
-    id: str = Field(..., description="Account ID")
-    name: str = Field(..., description="Account name")
-    type: str = Field(..., description="Account type")
-    balance: float = Field(..., description="Account balance")
-    currencyCode: str = Field(..., description="Currency code")
-    status: str = Field(..., description="Account status")
-    ownerExternalUserId: Optional[str] = Field(None, description="Owner external user ID")
-    accountNumber: Optional[str] = Field(None, description="Account number")
-    iban: Optional[str] = Field(None, description="IBAN")
-    bic: Optional[str] = Field(None, description="BIC/SWIFT code")
-    sortCode: Optional[str] = Field(None, description="Sort code")
-    availableBalance: Optional[float] = Field(None, description="Available balance")
-    creditLimit: Optional[float] = Field(None, description="Credit limit")
-    interestRate: Optional[float] = Field(None, description="Interest rate")
-    lastSync: Optional[str] = Field(None, description="Last sync timestamp")
-    flags: Optional[List[str]] = Field(None, description="Account flags")
-    accountNumberType: Optional[str] = Field(None, description="Account number type")
-    holderName: Optional[str] = Field(None, description="Account holder name")
-    institutionId: Optional[str] = Field(None, description="Institution ID")
-    institutionName: Optional[str] = Field(None, description="Institution name")
-
-
-class AccountsResponse(BaseModel):
-    """Model for accounts response."""
-    
-    accounts: List[Account] = Field(..., description="List of accounts")
-    totalCount: Optional[int] = Field(None, description="Total number of accounts")
-
-
 # Tink Callback Models
 class TinkCallbackSuccess(BaseModel):
     """Model for successful Tink callback response."""
@@ -347,4 +279,86 @@ class TinkCallbackResult(BaseModel):
             error=error,
             is_success=False,
             is_user_cancelled=error.error == "USER_CANCELLED"
-        ) 
+        )
+
+
+# Updated models to match actual Tink API response structure
+class AmountValue(BaseModel):
+    """Model for amount value structure."""
+    
+    unscaledValue: str = Field(..., description="Unscaled value as string")
+    scale: str = Field(..., description="Scale as string")
+
+
+class Amount(BaseModel):
+    """Model for amount structure."""
+    
+    value: AmountValue = Field(..., description="Amount value")
+    currencyCode: str = Field(..., description="Currency code")
+
+
+class Descriptions(BaseModel):
+    """Model for transaction descriptions."""
+    
+    original: str = Field(..., description="Original description")
+    display: str = Field(..., description="Display description")
+
+
+class Dates(BaseModel):
+    """Model for transaction dates."""
+    
+    booked: str = Field(..., description="Booked date")
+
+
+class Identifiers(BaseModel):
+    """Model for transaction identifiers."""
+    
+    providerTransactionId: str = Field(..., description="Provider transaction ID")
+
+
+class Types(BaseModel):
+    """Model for transaction types."""
+    
+    type: str = Field(..., description="Transaction type")
+
+
+class Transaction(BaseModel):
+    """Model for a single transaction matching actual Tink API response."""
+    
+    id: str = Field(..., description="Transaction ID")
+    accountId: str = Field(..., description="Account ID")
+    amount: Amount = Field(..., description="Transaction amount")
+    descriptions: Descriptions = Field(..., description="Transaction descriptions")
+    dates: Dates = Field(..., description="Transaction dates")
+    identifiers: Identifiers = Field(..., description="Transaction identifiers")
+    types: Types = Field(..., description="Transaction types")
+    status: str = Field(..., description="Transaction status")
+    providerMutability: str = Field(..., description="Provider mutability")
+
+
+class TransactionsResponse(BaseModel):
+    """Model for transactions response."""
+    
+    transactions: List[Transaction] = Field(..., description="List of transactions")
+    nextPageToken: Optional[str] = Field(None, description="Token for next page")
+
+
+class Account(BaseModel):
+    """Model for a single account matching actual Tink API response."""
+    
+    id: str = Field(..., description="Account ID")
+    name: str = Field(..., description="Account name")
+    type: str = Field(..., description="Account type")
+    balances: Dict[str, Any] = Field(..., description="Account balances")
+    identifiers: Dict[str, Any] = Field(..., description="Account identifiers")
+    dates: Dict[str, str] = Field(..., description="Account dates")
+    financialInstitutionId: str = Field(..., description="Financial institution ID")
+    customerSegment: str = Field(..., description="Customer segment")
+
+
+class AccountsResponse(BaseModel):
+    """Model for accounts response."""
+    
+    accounts: List[Account] = Field(..., description="List of accounts")
+    totalCount: Optional[int] = Field(None, description="Total number of accounts")
+    nextPageToken: Optional[str] = Field(None, description="Token for next page") 
