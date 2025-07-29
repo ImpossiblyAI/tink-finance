@@ -3,7 +3,7 @@ requires = ["hatchling>=1.21"]
 build-backend = "hatchling.build"
 
 [project]
-name = "tink-finance-python"
+name = "tink-finance"
 version = "0.1.0"
 description = "A Python client for the Tink Finance API"
 readme = "README.md"
