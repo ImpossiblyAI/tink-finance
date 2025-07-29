@@ -1,11 +1,12 @@
 """
-Tests for Tink callback parsing functionality.
+Tests for Tink callback parsing utilities.
 """
 
 import pytest
 from unittest.mock import Mock
 from tink_finance.callback import (
     parse_tink_callback,
+    parse_tink_callback_from_request,
     parse_tink_callback_url,
     is_user_cancelled,
     get_error_category,
@@ -13,8 +14,8 @@ from tink_finance.callback import (
     get_user_message,
     get_tracking_id
 )
-from tink_finance.models import TinkCallbackResult
-from tink_finance.exceptions import TinkCallbackError
+from tink_finance.models import TinkCallbackResult, TinkCallbackSuccess, TinkCallbackError
+from tink_finance.exceptions import TinkCallbackError as TinkCallbackParseError
 
 
 class TestCallbackParsing:
@@ -207,4 +208,87 @@ class TestCallbackParsing:
             assert result.error.error == error_case["error"]
             assert result.error.error_reason == error_case["error_reason"]
             assert result.error.message == error_case["message"]
-            assert result.error.tracking_id == error_case["tracking_id"] 
+            assert result.error.tracking_id == error_case["tracking_id"]
+
+
+class TestParseTinkCallbackFromRequest:
+    """Test the request-based callback parsing functionality."""
+    
+    def test_parse_from_fastapi_request(self):
+        """Test parsing from a FastAPI Request object."""
+        # Mock FastAPI Request
+        mock_request = Mock()
+        mock_request.query_params = {
+            "code": "auth_code_123",
+            "credentials_id": "cred_456",
+            "state": "user_session"
+        }
+        
+        result = parse_tink_callback_from_request(mock_request)
+        
+        assert result.is_success is True
+        assert result.success.code == "auth_code_123"
+        assert result.success.credentials_id == "cred_456"
+    
+    def test_parse_from_flask_request(self):
+        """Test parsing from a Flask request object."""
+        # Mock Flask request
+        mock_request = Mock()
+        mock_request.args = {
+            "code": "auth_code_123",
+            "credentials_id": "cred_456",
+            "state": "user_session"
+        }
+        
+        result = parse_tink_callback_from_request(mock_request)
+        
+        assert result.is_success is True
+        assert result.success.code == "auth_code_123"
+        assert result.success.credentials_id == "cred_456"
+    
+    def test_parse_from_django_request(self):
+        """Test parsing from a Django HttpRequest object."""
+        # Mock Django HttpRequest
+        mock_request = Mock()
+        mock_request.GET = {
+            "code": "auth_code_123",
+            "credentials_id": "cred_456",
+            "state": "user_session"
+        }
+        
+        result = parse_tink_callback_from_request(mock_request)
+        
+        assert result.is_success is True
+        assert result.success.code == "auth_code_123"
+        assert result.success.credentials_id == "cred_456"
+    
+    def test_parse_error_from_request(self):
+        """Test parsing an error callback from a request."""
+        # Mock FastAPI Request with error
+        mock_request = Mock()
+        mock_request.query_params = {
+            "error": "AUTHENTICATION_ERROR",
+            "error_reason": "USER_DECLINED_CONSENT",
+            "message": "User declined consent",
+            "tracking_id": "track_123"
+        }
+        
+        result = parse_tink_callback_from_request(mock_request)
+        
+        assert result.is_success is False
+        assert result.error.error == "AUTHENTICATION_ERROR"
+        assert result.error.error_reason == "USER_DECLINED_CONSENT"
+    
+    def test_parse_from_unsupported_request(self):
+        """Test parsing from an unsupported request type."""
+        # Mock unsupported request
+        mock_request = Mock()
+        # Remove all expected attributes
+        del mock_request.query_params
+        del mock_request.args
+        del mock_request.GET
+        
+        with pytest.raises(TinkCallbackParseError) as exc_info:
+            parse_tink_callback_from_request(mock_request)
+        
+        assert "Unsupported request type" in str(exc_info.value) 

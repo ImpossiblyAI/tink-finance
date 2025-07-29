@@ -15,7 +15,7 @@ from pydantic import BaseModel
 
 from tink_finance.client import TinkClient
 from tink_finance.callback import (
-    parse_tink_callback,
+    parse_tink_callback_from_request,
     is_user_cancelled,
     get_error_category,
     get_error_reason,
@@ -55,7 +55,7 @@ async def handle_tink_callback(request: Request) -> CallbackResponse:
     """
     try:
         # Parse the callback directly from the request
-        result = parse_tink_callback(dict(request.query_params))
+        result = parse_tink_callback_from_request(request)
         
         # Log the callback for debugging
         logger.info(f"Tink callback received: success={result.is_success}, user_cancelled={result.is_user_cancelled}")

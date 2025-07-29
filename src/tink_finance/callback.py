@@ -5,10 +5,101 @@ This module provides utilities for parsing Tink Link callback responses,
 handling both successful responses and various error cases.
 """
 
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Union
 from urllib.parse import parse_qs, urlparse
 from tink_finance.models import TinkCallbackResult, TinkCallbackSuccess, TinkCallbackError
 from tink_finance.exceptions import TinkCallbackError as TinkCallbackParseError
+
+def parse_tink_callback_from_request(request: Any) -> TinkCallbackResult:
+    """
+    Parse Tink callback from a web framework Request object.
+    
+    This function extracts query parameters from various web framework Request objects
+    and parses the Tink callback response. It supports FastAPI, Flask, and Django.
+    
+    Args:
+        request: Request object from FastAPI, Flask, or Django containing the callback parameters
+        
+    Returns:
+        TinkCallbackResult with either success or error information
+        
+    Raises:
+        TinkCallbackParseError: If the callback parameters are invalid or missing required fields
+        
+    Example:
+        >>> # FastAPI
+        >>> from fastapi import Request
+        >>> @app.get("/tink/callback")
+        >>> async def handle_callback(request: Request):
+        >>>     result = parse_tink_callback_from_request(request)
+        >>> 
+        >>> # Flask
+        >>> from flask import request
+        >>> @app.route("/tink/callback")
+        >>> def handle_callback():
+        >>>     result = parse_tink_callback_from_request(request)
+        >>> 
+        >>> # Django
+        >>> from django.http import HttpRequest
+        >>> def handle_callback(request: HttpRequest):
+        >>>     result = parse_tink_callback_from_request(request)
+    """
+    try:
+        # Extract query parameters based on the request type
+        query_params = _extract_query_params(request)
+        
+        # Parse the callback using the existing function
+        return parse_tink_callback(query_params)
+        
+    except Exception as e:
+        raise TinkCallbackParseError(f"Failed to parse callback from request: {str(e)}") from e
+
+
+def _extract_query_params(request: Any) -> Dict[str, Any]:
+    """
+    Extract query parameters from various web framework request objects.
+    
+    Args:
+        request: Request object from FastAPI, Flask, or Django
+        
+    Returns:
+        Dictionary of query parameters
+        
+    Raises:
+        TinkCallbackParseError: If the request type is not supported
+    """
+    # Try to detect the framework and extract parameters accordingly
+    
+    # FastAPI Request
+    if hasattr(request, 'query_params'):
+        return dict(request.query_params)
+    
+    # Flask Request
+    elif hasattr(request, 'args'):
+        return dict(request.args)
+    
+    # Django HttpRequest
+    elif hasattr(request, 'GET'):
+        return dict(request.GET)
+    
+    # Generic object with query_params attribute
+    elif hasattr(request, 'query_params'):
+        return dict(request.query_params)
+    
+    # Generic object with args attribute
+    elif hasattr(request, 'args'):
+        return dict(request.args)
+    
+    # Generic object with GET attribute
+    elif hasattr(request, 'GET'):
+        return dict(request.GET)
+    
+    else:
+        raise TinkCallbackParseError(
+            f"Unsupported request type: {type(request)}. "
+            "Expected FastAPI Request, Flask request, or Django HttpRequest. "
+            "The request object should have query_params, args, or GET attribute."
+        )
 
 
 def parse_tink_callback(query_params: Dict[str, Any]) -> TinkCallbackResult:
